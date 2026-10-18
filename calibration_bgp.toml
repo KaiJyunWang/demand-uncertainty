@@ -1,0 +1,49 @@
+# Annual time; composite goods and unit household time endowment.
+[economic]
+rho = 0.04
+gamma = 1.0 # log CRRA ensures constant-hours balanced growth
+epsilon = 7.0
+varphi = 5.0
+A = 1.0
+chi = 624.8571428571429 # (6/7)*3^6: flexible detrended C=N=1/3
+K = 0.0015             # fixed expense in quality-normalized composite units
+sigma_a = 0.20        # log taste / sqrt(year)
+lambda0 = 0.50        # intensity for quality-normalized R&D effort
+omega = 0.50
+premium = 0.05        # delta_Q, log-quality premium
+sigma_Q = 0.20
+pi_target = 0.01980262729617973
+phi_pi = 1.5
+
+[initial]
+mean_a = -0.03
+sd_a = 0.12
+mean_b = -0.03
+variance = 0.04
+log_nominal_price = 0.0
+
+[numerical]
+dt = 0.25
+steps = 8
+nx = 51
+na = 51
+nb = 51
+nv = 51
+# Concentrate 51 prices around stationary support; old spacing was 0.018.
+xmin = -0.075
+xmax = 0.075
+amin = -1.50
+amax = 1.50
+bmin = -1.20
+bmax = 1.20
+# BGP uses no terminal horizon. Legacy transition settings below are ignored except
+# terminal_iterations/tolerance, reused for stationary Howard iteration.
+price_temperature = 0.00001 # numerical smoothing; check the zero-temperature limit
+terminal_consumption = 0.3333333333333333
+terminal_value = "frozen" # "frozen" single-firm continuation, or "zero"
+terminal_iterations = 500
+terminal_tolerance = 1.0e-7
+max_iterations = 55
+tolerance = 1.0e-5
+jacobian_refresh = 5
+output = "results_bgp"

@@ -1,0 +1,7 @@
+
+Fontconfig error: No writable cache directories
+	/var/cache/fontconfig
+	/home/b11303072/.cache/fontconfig
+	/home/b11303072/.fontconfig
+Tensor kernels: (51, 51, 51, 51) states=6765201 nnz=3785460/1588648 threads=16
+Figures and underlying CSV data saved in /home/b11303072/demand-uncertainty/results_bgp/figures
