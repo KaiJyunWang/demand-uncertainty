@@ -9,6 +9,7 @@ bgp_growth_rates(G,p)=(quality=G,consumption=G/(p.epsilon-1),
     interest=p.rho+p.gamma*G/(p.epsilon-1)+p.pi_target)
 
 function stationary_firm(g,p,n,Y,w,G)
+    p.replacement_entry && error("Use the tensor backend for exit and replacement entry")
     growth=G/(p.epsilon-1)
     discount=p.rho+(p.gamma-1)*growth
     discount>0 || throw(DomainError(discount,"nonpositive detrended discount rate"))
@@ -22,15 +23,15 @@ function stationary_firm(g,p,n,Y,w,G)
     policy=nothing
     for iteration in 1:n.terminal_iterations
         _,policy=bellman_step(V,g,p,n,Y,w,drift,0.,discount;
-                             matrices=matrices,center=center)
+                             matrices=matrices,center=center,cashflow_constraint=true)
         mix=spdiagm(0=>1 .-policy.probability)*P0+spdiagm(0=>policy.probability)*P1
         kernel=policy.pricing*mix
-        flow=[n.dt*((exp(y+center)-w/p.A)*exp(z-p.epsilon*(y+center))*Y-policy.k[j])
+        flow=[n.dt*((exp(y+center)-w/p.A)*exp(z-p.epsilon*(y+center))*Y-rd_expense(policy.k[j],p))
               for (j,(y,z,b,v)) in enumerate(g.states)]
         reward=policy.pricing*flow.-p.K.*(1 .-diag(policy.pricing)).+policy.entropy
         V=(spdiagm(0=>ones(length(V)))-exp(-discount*n.dt)*kernel)\Vector(reward)
         check,newpolicy=bellman_step(V,g,p,n,Y,w,drift,0.,discount;
-                                     matrices=matrices,center=center)
+                                     matrices=matrices,center=center,cashflow_constraint=true)
         err=maximum(abs.(check.-V))
         if err<n.terminal_tolerance
             # Use the policy evaluated by the linear system. The residual
@@ -66,7 +67,10 @@ function bgp_residual(z,g,p,n; details=false)
     dispersion=dot(f.post,[exp(a-p.epsilon*(y+center)) for (y,a,b,v) in g.states])
     N=Y*dispersion/p.A
     mean_b=dot(mu,[s[3] for s in g.states])
-    resource=(Y-C-p.K*f.frequency-f.research)/C
+    variable_research=f.research
+    active_mass=dot(f.post,Float64.(firm.policy.k.>0))
+    research=variable_research+p.F_R*active_mass
+    resource=(Y-C-p.K*f.frequency-research)/C
     labor=log(w)-log(p.chi)-p.varphi*log(N)-p.gamma*log(C)
     residual=[log(price),resource,labor,mean_b]
     lambda=[p.lambda0*k^p.omega for k in firm.policy.k]
@@ -74,14 +78,18 @@ function bgp_residual(z,g,p,n; details=false)
     # The exact discrete split mean equation must also vanish off boundaries.
     split_flux=dot(f.post,firm.policy.probability.*[p.premium-s[3] for s in g.states])/n.dt
     split_drift=G*dot(f.post,1 .-firm.policy.probability)
-    budget=Y-w*N-p.K*f.frequency-f.research+w*N-C
+    budget=Y-w*N-p.K*f.frequency-research+w*N-C
     moments=(C=C,Y=Y,w=w,N=N,G=G,growth=G/(p.epsilon-1),
-        price_frequency=f.frequency,research=f.research,
+        price_frequency=f.frequency,research=research,variable_research=variable_research,
+        rd_active_mass=active_mass,fixed_research=p.F_R*active_mass,
         innovation_frequency=dot(f.post,lambda),clipping=f.clip,
         mean_b=mean_b,mean_a=dot(mu,[s[2] for s in g.states]),
         mean_variance=dot(mu,[s[4] for s in g.states]),
         quality_flux=flux,continuous_growth_error=G-flux,
         split_growth_error=split_drift-split_flux,budget_error=budget)
+    profits=[operating_profit(x+center,a,Y,w,p) for (x,a,b,v) in g.states]
+    gain=exp(-(p.rho+(p.gamma-1)*G/(p.epsilon-1))*n.dt).*((firm.policy.P1-firm.policy.P0)*firm.value)
+    moments=merge(moments,rd_financing_statistics(firm.policy.k,profits,gain,f.post,p,n.dt))
     details ? (residual=residual,firm=firm,distribution=mu,post_distribution=f.post,
                distribution_error=distribution_error,moments=moments,
                rates=bgp_growth_rates(G,p)) : residual
@@ -90,7 +98,7 @@ end
 function solve_balanced_growth(p,n,ini=Initial();guess=nothing,verbose=true,warmstart=nothing)
     validate(p,n,ini)
     p.gamma==1 || throw(ArgumentError("with separable, constant-chi preferences, constant-hours balanced growth requires gamma=1; use calibration_bgp.toml"))
-    if n.nx*n.na*n.nb*n.nv >= 100_000
+    if p.replacement_entry || n.nx*n.na*n.nb*n.nv >= 100_000
         return solve_large_bgp(p,n,ini;guess=guess,verbose=verbose,warmstart=warmstart)
     end
     g=make_grid(p,n,ini)
@@ -140,6 +148,9 @@ function write_bgp_results(result,p,n;directory=n.output)
     hasproperty(result,:large) && return write_large_bgp_results(result,p,n;directory=directory)
     mkpath(directory)
     data=Dict{String,Any}(string(k)=>v for (k,v) in pairs(result.moments))
+    data["rd_cashflow_constraint"]=true
+    data["F_R"]=p.F_R
+    data["lambda0"]=p.lambda0
     data["converged"]=result.converged
     data["max_equilibrium_residual"]=norm(result.residual,Inf)
     data["bellman_residual"]=result.firm.error

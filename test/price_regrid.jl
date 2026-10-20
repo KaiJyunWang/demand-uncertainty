@@ -2,7 +2,7 @@ using Test, DemandUncertainty, TOML, Serialization
 include(joinpath(@__DIR__,"..","scripts","price_regrid.jl"))
 @testset "price-grid warm-start transfer" begin
     mktempdir() do dir
-        old=TOML.parsefile(joinpath(@__DIR__,"..","calibration_bgp.toml"))
+        old=TOML.parsefile(joinpath(@__DIR__,"fixtures","learning.toml"))
         for key in ("nx","na","nb","nv"); old["numerical"][key]=5;end
         old["numerical"]["xmin"]=-.45;old["numerical"]["xmax"]=.45
         oldpath=joinpath(dir,"old.toml")

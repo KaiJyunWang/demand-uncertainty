@@ -12,6 +12,8 @@ Base.@kwdef struct Parameters
     varphi::Float64 = 5.0
     A::Float64 = 1.0
     chi::Float64 = (6/7)*3^7
+    replacement_entry::Bool = false
+    F_R::Float64 = 0.0 # quality-normalized operating flow while R&D is positive
     K::Float64 = 0.0015
     sigma_a::Float64 = 0.20
     lambda0::Float64 = 0.50
@@ -29,6 +31,13 @@ Base.@kwdef struct Initial
     log_nominal_price::Float64 = 0.0
 end
 Base.@kwdef struct Numerics
+    bgp_branch::String = "auto" # auto tests zero-growth first; positive skips that class
+    price_core_min::Float64 = -.075
+    price_core_max::Float64 = .075
+    price_upper_tail_nodes::Int = 0
+    quality_upper_tail_nodes::Int = 0
+    price_lower_tail_nodes::Int = 0
+    quality_lower_tail_nodes::Int = 0
     dt::Float64 = 0.25
     steps::Int = 8
     nx::Int = 51
@@ -63,8 +72,10 @@ end
 function validate(p,n,ini)
     @assert p.rho > 0 && p.gamma > 0 && p.epsilon > 1 && p.varphi > 0
     @assert p.A > 0 && p.chi > 0 && p.K > 0 && p.sigma_a > 0
+    @assert p.F_R >= 0
     @assert p.lambda0 >= 0 && 0 < p.omega < 1 && p.sigma_Q > 0
     @assert p.premium >= 0 && p.phi_pi > 1
+    @assert n.bgp_branch in ("auto","positive")
     @assert n.dt > 0 && n.steps >= 1 && min(n.nx,n.na,n.nb,n.nv) >= 2
     @assert n.xmin < n.xmax && n.amin < n.amax && n.bmin < n.bmax
     @assert n.price_temperature >= 0
@@ -78,10 +89,28 @@ struct Grid
     dims::NTuple{4,Int}
     states::Vector{NTuple{4,Float64}}
 end
+function tail_axis(lo,hi,count,tail,corelo;upper=0,corehi=hi)
+    tail==0 && upper==0 && return collect(range(lo,hi,length=count))
+    corelo=tail==0 ? lo : corelo
+    corehi=upper==0 ? hi : corehi
+    0<=tail && 0<=upper && tail+upper<count-2 || error("Invalid tail node counts")
+    (tail==0 || lo<corelo) && (upper==0 || corehi<hi) && corelo<corehi || error("Invalid tail grid")
+    lower=tail==0 ? Float64[] : collect(range(lo,corelo,length=tail+1))[1:end-1]
+    center=collect(range(corelo,corehi,length=count-tail-upper))
+    higher=upper==0 ? Float64[] : collect(range(corehi,hi,length=upper+1))[2:end]
+    vcat(lower,center,higher)
+end
+price_axis(n)=tail_axis(n.xmin,n.xmax,n.nx,n.price_lower_tail_nodes,n.price_core_min;
+    upper=n.price_upper_tail_nodes,corehi=n.price_core_max)
+taste_axis(n)=tail_axis(n.amin,n.amax,n.na,n.quality_lower_tail_nodes,-1.5;
+    upper=n.quality_upper_tail_nodes,corehi=1.5)
+belief_axis(n)=tail_axis(n.bmin,n.bmax,n.nb,n.quality_lower_tail_nodes,-1.2;
+    upper=n.quality_upper_tail_nodes,corehi=1.2)
+
 function make_grid(p,n,ini=Initial())
-    ax=(collect(range(n.xmin,n.xmax,length=n.nx)),
-        collect(range(n.amin,n.amax,length=n.na)),
-        collect(range(n.bmin,n.bmax,length=n.nb)),
+    ax=(price_axis(n),
+        taste_axis(n),
+        belief_axis(n),
         # Exact reset and initial variance nodes; a nonuniform variance grid.
         sort!(unique!(round.(vcat(collect(range(0,max(ini.variance,p.sigma_Q^2),length=n.nv)),
                             [ini.variance,p.sigma_Q^2]); digits=14))))
@@ -154,19 +183,53 @@ function transition(g,p,n,inflation,market; reset=false, quality_growth=0.0)
 end
 
 """Continuous-time optimal R&D, conditional on innovation value gain G."""
-rd_policy(G,p)=G<=0 || p.lambda0==0 ? 0.0 : (p.lambda0*p.omega*G)^(1/(1-p.omega))
+rd_expense(k,p)=k+(k>0 ? p.F_R : 0.)
+rd_active_candidate(G,p;cap=Inf)=G<=0 || p.lambda0==0 || cap<=p.F_R ? 0. :
+    min(cap-p.F_R,(p.lambda0*p.omega*G)^(1/(1-p.omega)))
+function rd_policy(G,p;cap=Inf)
+    k=rd_active_candidate(G,p;cap=cap)
+    k>0 && -rd_expense(k,p)+p.lambda0*k^p.omega*G>0 ? k : 0.
+end
+
+operating_profit(x,a,Y,w,p)=(exp(x)-w/p.A)*exp(a-p.epsilon*x)*Y
+rd_cashflow_cap(x,a,Y,w,p)=max(operating_profit(x,a,Y,w,p),0.)
 
 # Exact optimizer for the discrete step's probability 1-exp(-lambda(k)*dt).
-# It converges to rd_policy as dt -> 0 and never silently caps R&D or intensities.
-function step_rd(G,p,dt)
-    (G<=0 || p.lambda0==0) && return 0.0
-    hi=rd_policy(G,p); lo=0.0
+# It converges to rd_policy as dt -> 0. The optional cap is an economic
+# cash-flow constraint, not a numerical bound on innovation intensity.
+function step_rd(G,p,dt;cap=Inf)
+    (G<=0 || p.lambda0==0 || cap<=p.F_R) && return 0.0
+    hi=(p.lambda0*p.omega*G)^(1/(1-p.omega)); lo=0.0
     for _ in 1:45
         mid=(lo+hi)/2
         marginal=p.lambda0*p.omega*mid^(p.omega-1)*G*exp(-p.lambda0*mid^p.omega*dt)
         marginal>1 ? (lo=mid) : (hi=mid)
     end
-    (lo+hi)/2
+    k=min((lo+hi)/2,cap-p.F_R)
+    step_rd_surplus(k,G,p,dt)>0 ? k : 0.
+end
+
+step_rd_surplus(k,G,p,dt)=-dt*rd_expense(k,p)-expm1(-p.lambda0*k^p.omega*dt)*G
+
+function rd_financing_statistics(k,profits,gains,mass,p,dt)
+    binding_mass=zero_cashflow_mass=shortfall=mean_eta=max_violation=max_kkt=0.
+    for j in eachindex(k)
+        cap=max(profits[j],0.);gain=gains[j]
+        desired=step_rd(gain,p,dt)
+        binding=k[j]>0 && rd_expense(k[j],p)>=cap*(1-1e-9)
+        binding_mass+=mass[j]*binding
+        zero_cashflow_mass+=mass[j]*(cap<=0)
+        shortfall+=mass[j]*max(desired-k[j],0.)
+        max_violation=max(max_violation,rd_expense(k[j],p)-cap)
+        if k[j]>0 && gain>0 && p.lambda0>0
+            marginal=exp(log(p.lambda0*p.omega*gain)+(p.omega-1)*log(k[j])-p.lambda0*k[j]^p.omega*dt)
+            mean_eta+=mass[j]*(binding ? max(marginal-1,0.) : 0.)
+            max_kkt=max(max_kkt,binding ? max(1-marginal,0.) : abs(marginal-1))
+        end
+    end
+    (rd_binding_mass=binding_mass,rd_zero_cashflow_mass=zero_cashflow_mass,
+     rd_cashflow_shortfall=shortfall,rd_mean_financing_multiplier=mean_eta,
+     rd_max_cashflow_violation=max_violation,rd_max_kkt_residual=max_kkt)
 end
 
 struct Policy
@@ -181,7 +244,7 @@ struct Policy
     clip1::Vector{Float64}
 end
 
-function bellman_step(next,g,p,n,Y,w,inflation,market,r; matrices=nothing, center=0.0)
+function bellman_step(next,g,p,n,Y,w,inflation,market,r; matrices=nothing, center=0.0, cashflow_constraint=false)
     abs(r)<100 || throw(DomainError(r,"trial discount rate exceeds numerical search range"))
     P0,c0,P1,c1=if matrices===nothing
         a,b=transition(g,p,n,inflation,market)
@@ -195,11 +258,12 @@ function bellman_step(next,g,p,n,Y,w,inflation,market,r; matrices=nothing, cente
     m=length(next); stay=zeros(m); k=zeros(m); prob=zeros(m)
     for j in 1:m
         x,a,_,_=g.states[j]
-        k[j]=step_rd(disc*(e1[j]-e0[j]),p,n.dt)
-        prob[j]=-expm1(-p.lambda0*k[j]^p.omega*n.dt)
         actual_x=x+center
-        profit=(exp(actual_x)-w/p.A)*exp(a-p.epsilon*actual_x)*Y
-        stay[j]=n.dt*(profit-k[j])+disc*((1-prob[j])*e0[j]+prob[j]*e1[j])
+        profit=operating_profit(actual_x,a,Y,w,p)
+        k[j]=step_rd(disc*(e1[j]-e0[j]),p,n.dt;
+            cap=cashflow_constraint ? max(profit,0.) : Inf)
+        prob[j]=-expm1(-p.lambda0*k[j]^p.omega*n.dt)
+        stay[j]=n.dt*(profit-rd_expense(k[j],p))+disc*((1-prob[j])*e0[j]+prob[j]*e1[j])
     end
     value=copy(stay); target=collect(1:m)
     rows=Int[]; cols=Int[]; weights=Float64[]; entropy=zeros(m)
@@ -271,7 +335,7 @@ function terminal_value(g,p,n,Y,w,market)
         _,policy=bellman_step(V,g,p,n,Y,w,p.pi_target,market,p.rho;matrices=matrices,center=center)
         mix=spdiagm(0=>1 .-policy.probability)*P0+spdiagm(0=>policy.probability)*P1
         kernel=policy.pricing*mix
-        flow=[n.dt*((exp(x+center)-w/p.A)*exp(a-p.epsilon*(x+center))*Y-policy.k[j])
+        flow=[n.dt*((exp(x+center)-w/p.A)*exp(a-p.epsilon*(x+center))*Y-rd_expense(policy.k[j],p))
               for (j,(x,a,b,v)) in enumerate(g.states)]
         reward=policy.pricing*flow.-p.K.*(1 .-diag(policy.pricing)).+policy.entropy
         V=(spdiagm(0=>ones(length(V)))-exp(-p.rho*n.dt)*kernel)\Vector(reward)
@@ -450,4 +514,6 @@ function write_results(result,p,n; directory=n.output)
 end
 include("BalancedGrowth.jl")
 include("LargeBGP.jl")
+include("ZeroResearchBGP.jl")
+include("ReplacementEntry.jl")
 end # module

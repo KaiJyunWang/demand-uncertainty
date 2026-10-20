@@ -1,0 +1,94 @@
+Test Summary:                          | Pass  Total  Time
+parameters and provisional calibration |    5      5  2.0s
+Test Summary:                                         | Pass  Total  Time
+Gaussian filtering, Inada policy, and time-step limit |   27     27  0.2s
+Test Summary:                                    | Pass  Total  Time
+positive transitions and Bellman/forward duality |   11     11  2.2s
+Test Summary:                                                  | Pass  Total  Time
+equilibrium residual accounting and terminal policy evaluation |    8      8  2.8s
+Test Summary:                                       | Pass  Total  Time
+price smoothing bounds and exact forward accounting |    5      5  0.1s
+Test Summary:                                              | Pass  Total  Time
+balanced growth transformations and invariant distribution |    8      8  5.5s
+Test Summary:                                     | Pass  Total  Time
+stationary balanced-growth equilibrium end to end |   13     13  1.5s
+Tensor kernels: (5, 5, 5, 3) states=375 nnz=722/372 threads=4
+Test Summary:                                        | Pass  Total  Time
+tensor backend equals full sparse BGP discretization |   19     19  2.3s
+Test Summary:                                            | Pass  Total  Time
+requested 51-point grids and Julia default compatibility |    5      5  0.0s
+Tensor kernels: (5, 5, 5, 3) states=375 nnz=722/372 threads=4
+LARGE BGP iteration 1 residual 0.42838374904974064 growth 0.0055
+  aggregate derivative 2
+  aggregate derivative 4
+LARGE BGP iteration 2 residual 0.03343631010724857 growth 0.0076038864834750185
+  aggregate derivative 2
+  aggregate derivative 4
+LARGE BGP iteration 3 residual 0.00032179343848270925 growth 0.007853865010434922
+  aggregate derivative 2
+  aggregate derivative 4
+LARGE BGP iteration 4 residual 6.282372178034734e-9 growth 0.007856353873035482
+Test Summary:                             | Pass  Total  Time
+matrix-free aggregate root and CSV report |   13     13  0.7s
+Tensor kernels: (5, 5, 5, 3) states=375 nnz=722/372 threads=4
+Test Summary:                          | Pass  Total  Time
+cash-flow constrained R&D optimization |   78     78  0.8s
+Test Summary:                              | Pass  Total  Time
+Fixed R&D operating cost and participation |  394    394  0.1s
+Tensor kernels: (5, 5, 5, 3) states=375 nnz=722/372 threads=4
+Test Summary:                                | Pass  Total  Time
+Positive fixed cost sparse/tensor accounting |   11     11  0.0s
+Tensor kernels: (5, 5, 5, 3) states=375 nnz=673/374 threads=4
+ZERO-RESEARCH BGP iteration 1 residual 1.1789312277225912
+ZERO-RESEARCH BGP iteration 2 residual 0.016999537920620922
+ZERO-RESEARCH BGP iteration 3 residual 1.0587109066317879e-5
+ZERO-RESEARCH BGP iteration 4 residual 2.1910961933713224e-10
+Test Summary:                                         | Pass  Total  Time
+Zero-growth equilibrium and closed-class stationarity |   10     10  0.3s
+Tensor kernels: (7, 7, 7, 3) states=1029 nnz=1284/676 threads=4
+Tensor kernels: (7, 7, 7, 3) states=1029 nnz=1284/676 threads=4
+ZERO-RESEARCH BGP iteration 1 residual 1.3472467355430753
+ZERO-RESEARCH BGP iteration 2 residual 0.024225446485558466
+ZERO-RESEARCH BGP iteration 3 residual 0.00020040953071087664
+ZERO-RESEARCH BGP iteration 4 residual 1.4375725498894099e-8
+Test Summary:                                    | Pass  Total  Time
+Exit value and replacement population accounting |   22     22  0.5s
+Tensor kernels: (9, 9, 9, 9) states=6561 nnz=10961/3798 threads=4
+Test Summary:                                        | Pass  Total  Time
+Turnover-adjusted discrete quality and taste moments |    5      5  0.2s
+Test Summary:                       | Pass  Total  Time
+lambda0=3 finite-step participation |  144    144  0.0s
+Tensor kernels: (5, 5, 5, 3) states=375 nnz=673/374 threads=4
+LARGE BGP iteration 1 residual 1.7690639676025097 growth 0.0055
+  aggregate derivative 2
+  aggregate derivative 4
+LARGE BGP iteration 2 residual 0.38207384336590744 growth 0.03676249504749574
+  aggregate derivative 2
+  aggregate derivative 4
+LARGE BGP iteration 3 residual 0.06925794925951712 growth 0.056068514953113005
+  aggregate derivative 2
+  aggregate derivative 4
+LARGE BGP iteration 4 residual 0.0012296929238937437 growth 0.05934640374525945
+  aggregate derivative 2
+  aggregate derivative 4
+LARGE BGP iteration 5 residual 3.696676527109588e-7 growth 0.05940615964321401
+Test Summary:                                             | Pass  Total  Time
+Reject zero-growth warm start when research is profitable |    4      4  0.4s
+Tensor kernels: (5, 5, 5, 3) states=375 nnz=702/376 threads=4
+LARGE BGP iteration 1 residual 0.28799981234979377 growth 0.04
+  aggregate derivative 2
+  aggregate derivative 4
+LARGE BGP iteration 2 residual 0.04941942395801613 growth 0.056979721940004543
+  aggregate derivative 2
+  aggregate derivative 4
+LARGE BGP iteration 3 residual 0.0006448470883022583 growth 0.059374835099991294
+  aggregate derivative 2
+  aggregate derivative 4
+LARGE BGP iteration 4 residual 9.880364260084207e-8 growth 0.05940617278210602
+Test Summary:                                        | Pass  Total  Time
+Profit-scale invariance and labour-scale calibration |    8      8  0.3s
+Test Summary:                                             | Pass  Total  Time
+Nonuniform grids retain central resolution and both tails |    7      7  0.1s
+Observed-quality grid (17, 21, 21) states=7497 threads=4
+Test Summary:                                        | Pass  Total  Time
+Observed-quality primitives and stochastic operators |   38     38  3.1s

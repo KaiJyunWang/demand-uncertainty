@@ -1,5 +1,5 @@
 using DemandUncertainty, TOML
-config=length(ARGS)>=1 ? ARGS[1] : joinpath(@__DIR__,"..","calibration.toml")
+config=length(ARGS)>=1 ? ARGS[1] : joinpath(@__DIR__,"..","test","fixtures","transition.toml")
 p,n,ini=load_config(config)
 println("Solving finite-horizon menu-cost / learning / R&D equilibrium")
 guess=length(ARGS)>=2 ? TOML.parsefile(ARGS[2])["unknowns"] : nothing

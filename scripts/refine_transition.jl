@@ -1,6 +1,6 @@
 # Run independent numerical sensitivity experiments. Each may take several minutes.
 using DemandUncertainty, TOML
-config=length(ARGS)>=1 ? ARGS[1] : joinpath(@__DIR__,"..","calibration.toml")
+config=length(ARGS)>=1 ? ARGS[1] : joinpath(@__DIR__,"..","test","fixtures","transition.toml")
 p,n,ini=load_config(config)
 base=Dict(k=>getfield(n,k) for k in fieldnames(Numerics))
 cases=[("baseline",Dict{Symbol,Any}()),

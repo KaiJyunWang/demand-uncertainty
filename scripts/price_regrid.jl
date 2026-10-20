@@ -1,26 +1,33 @@
-# Transfer a converged solution to a different price grid as an initial guess.
-# Mass is deposited linearly; values are linearly interpolated. Both are re-solved.
-using Serialization,TOML
+# Conservative mass transfer and multilinear value interpolation between BGP grids.
+# Both policies and the equilibrium are subsequently re-solved.
+using Serialization,TOML,Interpolations
 function price_regrid(path,config,p,n,guess)
     saved=deserialize(path)
-    old=TOML.parse(saved.signature[1]);new=TOML.parsefile(config)
-    old["economic"]==new["economic"] || error("Price regridding requires unchanged economic parameters")
-    for key in ("na","nb","nv","amin","amax","bmin","bmax")
-        old["numerical"][key]==new["numerical"][key] || error("Changed nonprice grid: $key")
+    old=TOML.parse(saved.signature[1])
+    on=DemandUncertainty.Numerics(; (Symbol(k)=>v for (k,v) in old["numerical"])...)
+    oldaxes=(DemandUncertainty.price_axis(on),
+        DemandUncertainty.taste_axis(on),
+        DemandUncertainty.belief_axis(on),
+        collect(range(0,old["economic"]["sigma_Q"]^2,length=on.nv)))
+    newaxes=DemandUncertainty.tensor_grid(p,n).axes
+    guess==saved.signature[2] || error("Warm-start aggregates must match saved values")
+    itp=extrapolate(interpolate(oldaxes,reshape(saved.V,length.(oldaxes)),Gridded(Linear())),Flat())
+    dims=length.(newaxes);V=zeros(dims);mu=zeros(dims)
+    Threads.@threads for j in eachindex(V)
+        I=CartesianIndices(dims)[j]
+        V[j]=itp(ntuple(d->newaxes[d][I[d]],4)...)
     end
-    guess==saved.signature[2] || error("Use the cached equilibrium aggregates as the regrid guess")
-    ox=collect(range(old["numerical"]["xmin"],old["numerical"]["xmax"];length=old["numerical"]["nx"]))
-    ax=collect(range(n.xmin,n.xmax;length=n.nx))
-    nq=size(saved.V,2);V=zeros(n.nx,nq);mu=similar(V);fill!(mu,0.)
-    for i in eachindex(ax)
-        left,w=DemandUncertainty.bracket(ox,ax[i])
-        @views V[i,:].=(1-w).*saved.V[left,:].+w.*saved.V[left+1,:]
+    linear=LinearIndices(dims)
+    oldmass=reshape(saved.mu,length.(oldaxes))
+    for I in CartesianIndices(oldmass)
+        m=oldmass[I];m<=0 && continue
+        bw=ntuple(d->DemandUncertainty.bracket(newaxes[d],oldaxes[d][I[d]]),4)
+        for mask in 0:15
+            J=ntuple(d->bw[d][1]+((mask>>(d-1))&1),4)
+            weight=prod(((mask>>(d-1))&1)==1 ? bw[d][2] : 1-bw[d][2] for d in 1:4)
+            weight>0 && (mu[linear[J...]]+=m*weight)
+        end
     end
-    for i in eachindex(ox)
-        left,w=DemandUncertainty.bracket(ax,ox[i])
-        @views mu[left,:].+=(1-w).*saved.mu[i,:]
-        @views mu[left+1,:].+=w.*saved.mu[i,:]
-    end
-    println("Regridded warm start: mass ",sum(mu),", price spacing ",ax[2]-ax[1]);flush(stdout)
-    (V=V,mu=mu)
+    println("Regridded warm start: mass ",sum(mu)," dimensions ",dims);flush(stdout)
+    (V=reshape(V,n.nx,:),mu=reshape(mu,n.nx,:))
 end

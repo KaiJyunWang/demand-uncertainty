@@ -1,3 +1,8 @@
+using TOML
+_dispatch_config=isempty(ARGS) ? joinpath(@__DIR__,"..","calibration_bgp.toml") : ARGS[1]
+if get(TOML.parsefile(_dispatch_config),"information","")=="observed_quality"
+    include(joinpath(@__DIR__,"solve_observed_bgp.jl"))
+else
 using DemandUncertainty, TOML, Serialization
 config=length(ARGS)>=1 ? ARGS[1] : joinpath(@__DIR__,"..","calibration_bgp.toml")
 p,n,ini=load_config(config)
@@ -13,10 +18,17 @@ if length(ARGS)>=3
 end
 result=solve_balanced_growth(p,n,ini;guess=guess,warmstart=warmstart)
 report=write_bgp_results(result,p,n)
+if hasproperty(result,:large)
+    open(joinpath(n.output,"large_progress.toml"),"w") do io
+        TOML.print(io,Dict("iteration"=>length(result.history),"unknowns"=>result.unknowns,
+            "residuals"=>result.residual,"equilibrium_error"=>report["max_equilibrium_residual"],
+            "firm_error"=>report["bellman_residual"],"distribution_error"=>report["distribution_residual"],
+            "F_R"=>p.F_R,"equilibrium_selection"=>report["equilibrium_selection"]))
+    end
+end
 println(report)
 if hasproperty(result,:large) && result.converged
-    signature=(read(config,String),result.unknowns,string(VERSION),
-        read(joinpath(@__DIR__,"..","src","LargeBGP.jl"),String))
+    signature=DemandUncertainty.bgp_cache_signature(config,result.unknowns)
     serialize(joinpath(n.output,"plot_state.jls"),
         (signature=signature,V=result.workspace.V,mu=result.workspace.mu))
 end
@@ -30,3 +42,5 @@ end
 if result.moments.clipping>0.01
     println(stderr,"BGP root converged, but boundary clipping requires grid/domain refinement.")
 end
+
+end # information-structure dispatch

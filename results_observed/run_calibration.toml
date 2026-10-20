@@ -1,0 +1,26 @@
+information = "observed_quality"
+
+[numerical]
+nx = 101
+nq = 101
+dt = 0.125
+nz = 101
+output = "results_observed"
+
+[economic]
+varphi = 5.0
+omega = 0.5
+epsilon = 7.0
+chi = 685.5749353654443
+phi_pi = 1.5
+K = 0.02
+premium = 0.2
+gamma = 1.0
+sigma_a = 0.2
+lambda0 = 3.0
+replacement_entry = true
+pi_target = 0.01980262729617973
+A = 1.0
+sigma_Q = 0.5
+F_R = 0.01
+rho = 0.04

@@ -1,0 +1,16 @@
+rd_max_cashflow_violation = 3.469446951953614e-18
+saved_points_outside_policy_domain = 0
+noise = false
+initial_innovation = true
+years = 10.0
+entries = 0
+accepted_steps = 47
+policy_interpolation = "Interpolations.jl gridded linear, flat extrapolation; financing reoptimized at every solver stage"
+saved_points = 49
+seed = 2026
+policy_solution_dt = 0.125
+information = "observed_quality"
+rejected_steps = 0
+innovations = 0
+algorithm = "adaptive Tsit5 (noise off)"
+exits = 0

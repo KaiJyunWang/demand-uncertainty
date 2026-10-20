@@ -2,7 +2,7 @@
 
 julia_version = "1.13.0"
 manifest_format = "2.1"
-project_hash = "b9c97eec9f040ae03c8e48daf7457f86b7919d72"
+project_hash = "c79ee81d3542a58b8dafa26e0063d0b4b1b88021"
 
 [[deps.ADTypes]]
 deps = ["PrecompileTools"]
@@ -466,7 +466,7 @@ uuid = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 version = "1.9.1"
 
 [[deps.DemandUncertainty]]
-deps = ["CairoMakie", "Interpolations", "LinearAlgebra", "Printf", "Random", "SciMLBase", "Serialization", "SparseArrays", "StochasticDiffEq", "TOML"]
+deps = ["CairoMakie", "Interpolations", "LinearAlgebra", "OrdinaryDiffEqTsit5", "Printf", "Random", "SHA", "SciMLBase", "Serialization", "SparseArrays", "StochasticDiffEq", "TOML"]
 path = "."
 uuid = "31a38616-8aa4-4f0f-b225-dc750875a895"
 version = "0.1.0"
@@ -1897,6 +1897,13 @@ git-tree-sha1 = "3bc20fcc25eae4d01b2884a1e596af2a14ce7829"
 registries = "General"
 uuid = "127b3ac7-2247-4354-8eb6-78cf4e7c58e8"
 version = "2.9.9"
+
+[[deps.OrdinaryDiffEqTsit5]]
+deps = ["CommonSolve", "DiffEqBase", "FastBroadcast", "LinearAlgebra", "MuladdMacro", "OrdinaryDiffEqCore", "PrecompileTools", "Preferences", "RecursiveArrayTools", "Reexport", "SciMLBase", "TruncatedStacktraces"]
+git-tree-sha1 = "371de3eb5985febd9d7babb0937520653f2b15ca"
+registries = "General"
+uuid = "b1df2697-797e-41e3-8120-5422d3b24e4a"
+version = "2.1.5"
 
 [[deps.PCRE2_jll]]
 deps = ["Artifacts", "Libdl"]

@@ -2,7 +2,7 @@ using Test, LinearAlgebra, SparseArrays, DemandUncertainty
 const DU=DemandUncertainty
 
 @testset "parameters and provisional calibration" begin
-    p,n,ini=load_config(joinpath(@__DIR__,"..","calibration.toml"))
+    p,n,ini=load_config(joinpath(@__DIR__,"fixtures","transition.toml"))
     @test p.chi ≈ (6/7)*3^7
     @test p.pi_target ≈ log(1.02)
     @test p.omega==0.5
@@ -153,7 +153,7 @@ end
     P1,c1=transition(g,p,n,p.pi_target+G/6,0.;reset=true,quality_growth=G)
     center=log(7/6*w)
     direct,policy=bellman_step(vec(V),g,p,n,Y,w,p.pi_target+G/6,0.,p.rho;
-        matrices=(P0,c0,P1,c1),center=center)
+        matrices=(P0,c0,P1,c1),center=center,cashflow_constraint=true)
     output=similar(V)
     DU.tensor_bellman!(output,V,ws,p,n,Y,w,G)
     @test vec(output)≈direct atol=1e-11
@@ -173,6 +173,11 @@ end
     @test norm(large.residual-small.residual,Inf)<1e-7
     @test maximum(abs,vec(ws.V)-small.firm.value)<1e-9
     @test large.moments.mean_variance≈small.moments.mean_variance atol=1e-9
+    for field in (:rd_binding_mass,:rd_zero_cashflow_mass,:rd_cashflow_shortfall,:rd_mean_financing_multiplier)
+        @test getproperty(large.moments,field)≈getproperty(small.moments,field) atol=1e-9
+    end
+    @test large.moments.rd_max_cashflow_violation==0
+    @test large.moments.rd_max_kkt_residual<1e-8
     @test large.distribution_error<1e-9
     @test prod(ws.g.dims)==length(g.states)
     mktempdir() do folder
@@ -183,7 +188,7 @@ end
 end
 
 @testset "requested 51-point grids and Julia default compatibility" begin
-    p,n,ini=load_config(joinpath(@__DIR__,"..","calibration_bgp.toml"))
+    p,n,ini=load_config(joinpath(@__DIR__,"fixtures","learning.toml"))
     @test (n.nx,n.na,n.nb,n.nv)==(51,51,51,51)
     defaults=Numerics()
     @test (defaults.nx,defaults.na,defaults.nb,defaults.nv)==(51,51,51,51)
@@ -202,6 +207,9 @@ end
     @test norm(result.residual,Inf)<n.tolerance
     @test result.distribution_error<1e-8
     report=write_bgp_results(result,p,n)
+    @test report["rd_cashflow_constraint"]
+    @test report["rd_max_cashflow_violation"]==0
+    @test report["rd_max_kkt_residual"]<1e-8
     @test report["nx"]==5
     @test report["state_count"]==375
     @test report["julia_version"]==string(VERSION)
@@ -211,3 +219,13 @@ end
     @test length(lines)==2
     @test occursin("max_equilibrium_residual",lines[1])
 end
+
+include("cashflow_constraints.jl")
+
+include("fixed_rd_cost.jl")
+
+include("replacement_entry.jl")
+
+include("innovation_scale.jl")
+
+include("observed_quality.jl")

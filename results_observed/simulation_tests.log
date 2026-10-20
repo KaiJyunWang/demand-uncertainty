@@ -1,0 +1,3 @@
+Observed-quality grid (31, 31, 31) states=29791 threads=4
+Test Summary:                                        | Pass  Total   Time
+Observed-quality adaptive simulation and replacement |   10     10  24.0s

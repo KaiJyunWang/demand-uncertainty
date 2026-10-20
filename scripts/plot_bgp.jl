@@ -1,4 +1,9 @@
-# Run: julia --threads=16 --project=. scripts/plot_bgp.jl [config] [years] [seed]
+using TOML
+_dispatch_config=isempty(ARGS) ? joinpath(@__DIR__,"..","calibration_bgp.toml") : ARGS[1]
+if get(TOML.parsefile(_dispatch_config),"information","")=="observed_quality"
+    include(joinpath(@__DIR__,"plot_observed_bgp.jl"))
+else
+# Run: julia --threads=16 --project=. scripts/plot_bgp.jl [config] [years] [seed] [figure_directory]
 using DemandUncertainty, TOML, Serialization, Random, SparseArrays
 const DU = DemandUncertainty
 config = isempty(ARGS) ? joinpath(@__DIR__, "..", "calibration_bgp.toml") : ARGS[1]
@@ -9,7 +14,7 @@ p,n,ini = load_config(config)
 z = TOML.parsefile(joinpath(n.output,"checkpoint.toml"))["unknowns"]
 cache = joinpath(n.output,"plot_state.jls")
 # Cache includes its complete inputs: changing calibration or aggregate root invalidates it.
-signature = (read(config,String),z,string(VERSION),read(joinpath(@__DIR__,"..","src","LargeBGP.jl"),String))
+signature = DU.bgp_cache_signature(config,z)
 ws = DU.tensor_workspace(p,n,ini,z[4])
 if isfile(cache)
     saved = deserialize(cache)
@@ -31,7 +36,7 @@ axes = (ws.g.axes[1].+center,ws.g.axes[2],ws.g.axes[3],ws.g.axes[4])
 mu = reshape(ws.mu,ws.g.dims)
 marginals = [vec(sum(mu;dims=Tuple(j for j in 1:4 if j!=d))) for d in 1:4]
 all(m->isapprox(sum(m),1;atol=1e-9),marginals) || error("Marginal mass check failed")
-out = joinpath(n.output,"figures"); mkpath(out)
+out = length(ARGS)>3 ? ARGS[4] : joinpath(n.output,"figures"); mkpath(out)
 open(joinpath(out,"marginals.csv"),"w") do io
     println(io,"state,node,probability_mass")
     for d in 1:4, j in eachindex(axes[d])
@@ -40,7 +45,8 @@ open(joinpath(out,"marginals.csv"),"w") do io
 end
 
 include(joinpath(@__DIR__,"bgp_diagnostics.jl"))
-rows,diagnostics,events=simulate_firm(ws,p,n,z,axes,years,seed)
+policies=continuous_policies(ws,p,n,z,axes)
+rows,diagnostics,events=simulate_firm(ws,p,n,z,axes,years,seed;policies=policies)
 for (name,table) in (("firm_path.csv",rows),("firm_events.csv",events))
     open(joinpath(out,name),"w") do io
         if isempty(table)
@@ -75,7 +81,9 @@ labels=["Detrended log relative price", "Taste gap: a − M", "Belief gap: b −
 f=Figure(size=(1100,750))
 for d in 1:4
     ax=Axis(f[cld(d,2),mod1(d,2)],xlabel=labels[d],ylabel="Probability mass")
-    barplot!(ax,axes[d],marginals[d];color=:steelblue,width=0.9*(axes[d][2]-axes[d][1]))
+    gaps=diff(axes[d])
+    widths=0.9 .* vcat(first(gaps),min.(gaps[1:end-1],gaps[2:end]),last(gaps))
+    barplot!(ax,axes[d],marginals[d];color=:steelblue,width=widths)
 end
 Label(f[0,:],"Stationary equilibrium — pre-decision marginals ($(join(ws.g.dims," × ")))",fontsize=21)
 for ext in ("png","pdf"); save(joinpath(out,"equilibrium_marginals.$ext"),f); end
@@ -96,8 +104,10 @@ lines!(a2,t,b,label="Posterior mean",color=:darkorange)
 axislegend(a2;position=:rt,labelsize=12)
 a3=Axis(f[2,1],ylabel="Posterior variance")
 lines!(a3,t,series(:variance),color=:purple)
-a4=Axis(f[2,2],ylabel="Detrended R&D spending")
-lines!(a4,t,series(:research),color=:darkgreen)
+a4=Axis(f[2,2],ylabel="Detrended R&D expenditure")
+lines!(a4,t,series(:research_expenditure),label="Total",color=:darkgreen)
+lines!(a4,t,series(:research),label="Variable effort",color=:orange)
+axislegend(a4;position=:rt,labelsize=12)
 a5=Axis(f[3,1],xlabel="Years",ylabel="Physical sales")
 lines!(a5,t,series(:sales),color=:steelblue)
 a6=Axis(f[3,2],xlabel="Years",ylabel="Detrended profit flow")
@@ -105,11 +115,13 @@ lines!(a6,t,series(:operating_profit),label="Operating",color=:steelblue)
 lines!(a6,t,series(:net_flow),label="After R&D (menu costs are impulses)",color=:firebrick)
 axislegend(a6;position=:rt,labelsize=12)
 innovations=[e.time for e in events if e.kind=="innovation"]
+replacements=[e.time for e in events if e.kind=="entry"]
 for ax in (a1,a2,a3,a4,a5,a6)
+    isempty(replacements) || vlines!(ax,replacements;color=(:purple,.5),linestyle=:dot,linewidth=1)
     isempty(innovations) || vlines!(ax,innovations;color=(:black,.4),linestyle=:dash,linewidth=1)
 end
 linkxaxes!(a1,a2,a3,a4,a5,a6)
-Label(f[0,:],"One firm — seed $seed; dashed lines mark innovation successes",fontsize=21)
+Label(f[0,:],(p.replacement_entry ? "Product slot (successive firms)" : "One firm")*" — seed $seed; dashed lines mark innovation successes",fontsize=21)
 Label(f[4,:],"Adaptive continuous-time SDE; linearly interpolated policies; menu payments recorded as cash jumps.",fontsize=14)
 for ext in ("png","pdf"); save(joinpath(out,"firm_paths.$ext"),f); end
 # Reconstruct levels with P(0)=1 and M(0)=0 (hence Q(0)=1).
@@ -136,7 +148,22 @@ for ax in (l1,l2,l3,l4)
     isempty(innovations) || vlines!(ax,innovations;color=(:black,.3),linestyle=:dot,linewidth=1)
 end
 linkxaxes!(l1,l2,l3,l4)
-Label(f[0,:],"One firm in levels — P₀ = 1, M₀ = 0; seed $seed",fontsize=22)
+Label(f[0,:],(p.replacement_entry ? "Product slot in levels" : "One firm in levels")*" — P₀ = 1, M₀ = 0; seed $seed",fontsize=22)
 Label(f[3,:],"Nominal price panel uses a logarithmic axis; dotted vertical lines mark innovation successes.",fontsize=14)
 for ext in ("png","pdf"); save(joinpath(out,"firm_levels.$ext"),f); end
+if p.replacement_entry
+    bgrid=axes[3]
+    decisions=[policies.survival(x,b,b,0.)<=0 ? 2. : policies.surplus(x,b,b,0.)>0 ? 1. : 0.
+        for x in axes[1],b in bgrid]
+    f=Figure(size=(1100,750),fontsize=18)
+    ax=Axis(f[1,1],xlabel="Detrended log relative price",ylabel="Relative posterior mean beta",
+        title="Policy slice: taste = posterior mean, variance = 0")
+    hm=heatmap!(ax,axes[1],bgrid,decisions;colormap=[:steelblue,:orange,:firebrick],colorrange=(0.,2.))
+    Colorbar(f[1,2],hm;ticks=([0,1,2],["Continue","Reprice","Exit"]))
+    scatter!(ax,[policies.entry_price],[p.premium];color=:black,marker=:star5,markersize=18)
+    Label(f[2,:],"Star: entrant price and mean quality (entry variance is sigma_Q^2). Exit pays zero.",fontsize=14)
+    for ext in ("png","pdf");save(joinpath(out,"exit_policy.$ext"),f);end
+end
 println("Figures and underlying CSV data saved in ",abspath(out))
+
+end # information-structure dispatch

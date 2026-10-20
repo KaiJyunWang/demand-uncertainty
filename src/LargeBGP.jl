@@ -9,9 +9,9 @@ struct TensorGrid
     qstates::Vector{NTuple{3,Float64}}
 end
 function tensor_grid(p,n,ini=Initial())
-    ax=(collect(range(n.xmin,n.xmax,length=n.nx)),
-        collect(range(n.amin,n.amax,length=n.na)),
-        collect(range(n.bmin,n.bmax,length=n.nb)),
+    ax=(price_axis(n),
+        taste_axis(n),
+        belief_axis(n),
         collect(range(0,p.sigma_Q^2,length=n.nv)))
     dims=length.(ax)
     qstates=vec([(ax[2][I[1]],ax[3][I[2]],ax[4][I[3]])
@@ -125,9 +125,10 @@ mutable struct TensorPolicy
     k::Matrix{Float64}
     probability::Matrix{Float64}
     profit::Matrix{Float64}
+    exit::Matrix{Float64}
 end
 function TensorPolicy(nx,nq)
-    TensorPolicy((zeros(nx,nq) for _ in 1:7)...)
+    TensorPolicy((zeros(nx,nq) for _ in 1:8)...)
 end
 mutable struct TensorWorkspace
     g::TensorGrid
@@ -138,13 +139,14 @@ mutable struct TensorWorkspace
     work::Vector{Matrix{Float64}}
     V::Matrix{Float64}
     mu::Matrix{Float64}
+    entry::Matrix{Float64}
 end
 function tensor_workspace(p,n,ini,G)
     g=tensor_grid(p,n,ini); nx=g.dims[1];nq=length(g.qstates)
     K0=quality_kernel(g,p,n,G);K1=quality_kernel(g,p,n,G;reset=true)
     println("Tensor kernels: ",g.dims," states=",nx*nq," nnz=",nnz(K0.outgoing),"/",nnz(K1.outgoing)," threads=",nthreads())
     ws=TensorWorkspace(g,K0,K1,price_drift(g,p,n,G),TensorPolicy(nx,nq),
-        [zeros(nx,nq) for _ in 1:5],zeros(nx,nq),zeros(nx,nq))
+        [zeros(nx,nq) for _ in 1:5],zeros(nx,nq),zeros(nx,nq),zeros(nx,nq))
     # A broad, strictly positive initial mass helps discover slow-moving classes.
     for q in 1:nq,x in 1:nx
         a,b,v=g.qstates[q]
@@ -166,8 +168,8 @@ function continuation!(E0,E1,V,ws)
 end
 
 # Accurate, fast scalar optimization in log k; bracket safeguarded Newton.
-function tensor_rd(gain,p,dt)
-    (gain<=0 || p.lambda0==0) && return 0.
+function tensor_rd(gain,p,dt;cap=Inf)
+    (gain<=0 || p.lambda0==0 || cap<=p.F_R) && return 0.
     logupper=log(p.lambda0*p.omega*gain)/(1-p.omega)
     hi=logupper;lo=logupper-100.;x=hi
     for _ in 1:12
@@ -178,7 +180,8 @@ function tensor_rd(gain,p,dt)
         next=x-f/(p.omega-1-p.omega*rate)
         x=lo<next<hi ? next : (lo+hi)/2
     end
-    exp(x)
+    k=min(exp(x),cap-p.F_R)
+    step_rd_surplus(k,gain,p,dt)>0 ? k : 0.
 end
 
 function tensor_bellman!(dest,V,ws,p,n,Y,w,G; improve=true)
@@ -192,14 +195,14 @@ function tensor_bellman!(dest,V,ws,p,n,Y,w,G; improve=true)
         a,b,v=ws.g.qstates[q]
         @inbounds for x in 1:nx
             if improve
-                k=tensor_rd(disc*(E1[x,q]-E0[x,q]),p,n.dt)
+                actual=ws.g.axes[1][x]+center
+                pol.profit[x,q]=operating_profit(actual,a,Y,w,p)
+                k=tensor_rd(disc*(E1[x,q]-E0[x,q]),p,n.dt;cap=max(pol.profit[x,q],0.))
                 pol.k[x,q]=k
                 pol.probability[x,q]=-expm1(-p.lambda0*k^p.omega*n.dt)
-                actual=ws.g.axes[1][x]+center
-                pol.profit[x,q]=(exp(actual)-w/p.A)*exp(a-p.epsilon*actual)*Y
             end
             prob=pol.probability[x,q]
-            dest[x,q]=n.dt*(pol.profit[x,q]-pol.k[x,q])+disc*((1-prob)*E0[x,q]+prob*E1[x,q])
+            dest[x,q]=n.dt*(pol.profit[x,q]-rd_expense(pol.k[x,q],p))+disc*((1-prob)*E0[x,q]+prob*E1[x,q])
         end
         if improve
             m=-Inf;best=1
@@ -242,8 +245,13 @@ function tensor_bellman!(dest,V,ws,p,n,Y,w,G; improve=true)
         @inbounds for x in 1:nx
             paid=pol.mix[x,q]*(1-pol.reset[x,q])
             dest[x,q]=pol.keep[x,q]*dest[x,q]+pol.mix[x,q]*pool-p.K*paid+pol.entropy[x,q]
+            if improve
+                pol.exit[x,q]=p.replacement_entry && dest[x,q]<=0 ? 1. : 0.
+            end
+            dest[x,q]*=1-pol.exit[x,q]
         end
     end
+    p.replacement_entry && improve && update_entry!(ws,p)
     dest
 end
 
@@ -251,16 +259,16 @@ function tensor_price_forward!(dest,source,pol)
     nx,nq=size(source)
     @threads :static for q in 1:nq
         pool=0.
-        @inbounds for x in 1:nx;pool+=source[x,q]*pol.mix[x,q];end
+        @inbounds for x in 1:nx;pool+=source[x,q]*pol.mix[x,q]*(1-pol.exit[x,q]);end
         @inbounds @simd for x in 1:nx
-            dest[x,q]=pol.keep[x,q]*source[x,q]+pol.reset[x,q]*pool
+            dest[x,q]=pol.keep[x,q]*source[x,q]*(1-pol.exit[x,q])+pol.reset[x,q]*pool
         end
     end
     dest
 end
 function tensor_forward!(dest,source,ws)
     post=ws.work[1];weighted=ws.work[2];temp=ws.work[3];combined=ws.work[4]
-    tensor_price_forward!(post,source,ws.policy)
+    tensor_operating_forward!(post,source,ws)
     @. weighted=post*(1-ws.policy.probability)
     quality_apply!(combined,weighted,ws.K0.incoming)
     @. weighted=post*ws.policy.probability
@@ -294,7 +302,9 @@ function bicgstab!(x,apply!,rhs;tol=1e-11,maxiter=1500,label="linear",verbose=fa
         @. x=x+alpha*pv+omega*s
         @. r=s-omega*t
         err=norm(r)
-        verbose && iteration%100==0 && println(label," iteration ",iteration," residual ",err)
+        if verbose && iteration%100==0
+            println(label," iteration ",iteration," residual ",err);flush(stdout)
+        end
         err<tol && return (iterations=iteration,residual=err,converged=true)
         rho_old=rho
     end
@@ -312,7 +322,7 @@ function tensor_policy_value!(dest,source,ws)
             dest[x,q]=mixed;pool+=pol.reset[x,q]*mixed
         end
         @inbounds @simd for x in 1:nx
-            dest[x,q]=pol.keep[x,q]*dest[x,q]+pol.mix[x,q]*pool
+            dest[x,q]=(1-pol.exit[x,q])*(pol.keep[x,q]*dest[x,q]+pol.mix[x,q]*pool)
         end
     end
     dest
@@ -322,12 +332,12 @@ function tensor_reward!(dest,ws,p,n)
     @threads :static for q in 1:nq
         pool=0.
         @inbounds for x in 1:nx
-            flow=n.dt*(pol.profit[x,q]-pol.k[x,q])
+            flow=n.dt*(pol.profit[x,q]-rd_expense(pol.k[x,q],p))
             dest[x,q]=flow;pool+=pol.reset[x,q]*flow
         end
         @inbounds @simd for x in 1:nx
             paid=pol.mix[x,q]*(1-pol.reset[x,q])
-            dest[x,q]=pol.keep[x,q]*dest[x,q]+pol.mix[x,q]*pool-p.K*paid+pol.entropy[x,q]
+            dest[x,q]=(1-pol.exit[x,q])*(pol.keep[x,q]*dest[x,q]+pol.mix[x,q]*pool-p.K*paid+pol.entropy[x,q])
         end
     end
     dest
@@ -349,7 +359,10 @@ function tensor_firm!(ws,p,n,Y,w,G;verbose=false)
         end
         err<tolerance && return err,iteration
         tensor_reward!(rhs,ws,p,n)
-        status=bicgstab!(ws.V,apply!,rhs;tol=min(1e-10,tolerance/10),maxiter=600,label="value",verbose=verbose)
+        # Avoid oversolving a provisional policy; the final Bellman check retains
+        # the original strict tolerance. This is an inexact Howard iteration.
+        linear_tolerance=max(min(1e-10,tolerance/10),min(1e-4,0.01*err))
+        status=bicgstab!(ws.V,apply!,rhs;tol=linear_tolerance,maxiter=600,label="value",verbose=verbose)
         status.converged || println("  value linear iteration ",status)
     end
     throw(ErrorException("large firm iteration failed with residual $err"))
@@ -376,10 +389,14 @@ function tensor_invariant!(ws;verbose=false)
 end
 
 function tensor_moments(ws,p,n,C,Y,w,G)
-    post=ws.work[5];tensor_price_forward!(post,ws.mu,ws.policy)
+    continuation!(ws.work[2],ws.work[3],ws.V,ws)
+    E0=ws.work[2];E1=ws.work[3]
+    disc=exp(-(p.rho+(p.gamma-1)*G/(p.epsilon-1))*n.dt)
+    post=ws.work[5];tensor_operating_forward!(post,ws.mu,ws)
     nx,nq=size(post);center=log(p.epsilon/(p.epsilon-1)*w/p.A)
     # Per-block reductions avoid slow threaded atomics and large state-vector temporaries.
-    sums=zeros(12,nq)
+    sums=zeros(22,nq)
+    violations=zeros(nq);kkt_errors=zeros(nq)
     @threads :static for q in 1:nq
         a,b,v=ws.g.qstates[q]
         @inbounds for x in 1:nx
@@ -392,24 +409,58 @@ function tensor_moments(ws,p,n,C,Y,w,G)
             sums[3,q]+=before*b
             sums[4,q]+=before*a
             sums[5,q]+=before*v
-            sums[6,q]+=before*pol.mix[x,q]*(1-pol.reset[x,q])/n.dt
-            sums[7,q]+=mass*k
+            sums[6,q]+=before*(1-pol.exit[x,q])*pol.mix[x,q]*(1-pol.reset[x,q])/n.dt
+            exited=before*pol.exit[x,q]/n.dt
+            sums[19,q]+=exited
+            sums[20,q]+=exited*(p.premium-b)
+            sums[21,q]+=exited*(p.premium-a)
+            sums[22,q]+=exited*b
+            sums[7,q]+=mass*rd_expense(k,p)
+            sums[17,q]+=mass*k
+            sums[18,q]+=mass*(k>0)
             sums[8,q]+=mass*rate
             sums[9,q]+=mass*rate*(p.premium-b)
             clip=ws.drift.outside[x] ? 1. : (1-prob)*ws.K0.clipping[q]+prob*ws.K1.clipping[q]
             sums[10,q]+=mass*clip
             sums[11,q]+=mass*prob*(p.premium-b)/n.dt
             sums[12,q]+=mass*(1-prob)*G
+            cap=max(pol.profit[x,q],0.)
+            gain=disc*(E1[x,q]-E0[x,q])
+            desired=tensor_rd(gain,p,n.dt)
+            binding=k>0 && rd_expense(k,p)>=cap*(1-1e-9)
+            sums[13,q]+=mass*binding
+            sums[14,q]+=mass*(cap<=0)
+            sums[15,q]+=mass*max(desired-k,0.)
+            violations[q]=max(violations[q],rd_expense(k,p)-cap)
+            if k>0 && gain>0 && p.lambda0>0
+                logm=log(p.lambda0*p.omega*gain)+(p.omega-1)*log(k)-rate*n.dt
+                marginal=exp(clamp(logm,-745.,700.))
+                eta=binding ? max(marginal-1,0.) : 0.
+                sums[16,q]+=mass*eta
+                stationarity_error=binding ? max(1-marginal,0.) : abs(marginal-1)
+                kkt_errors[q]=max(kkt_errors[q],stationarity_error)
+            end
         end
     end
     totals=vec(sum(sums,dims=2));N=Y*totals[2]/p.A
     residual=[log(totals[1]),(Y-C-p.K*totals[6]-totals[7])/C,
               log(w)-log(p.chi)-p.varphi*log(N)-p.gamma*log(C),totals[3]]
     moments=(C=C,Y=Y,w=w,N=N,G=G,growth=G/(p.epsilon-1),
-        price_frequency=totals[6],research=totals[7],innovation_frequency=totals[8],
-        quality_flux=totals[9],clipping=totals[10],mean_b=totals[3],mean_a=totals[4],mean_variance=totals[5],
-        continuous_growth_error=G-totals[9],split_growth_error=totals[12]-totals[11],
-        budget_error=Y-p.K*totals[6]-totals[7]-C)
+        price_frequency=totals[6],research=totals[7],variable_research=totals[17],
+        rd_active_mass=totals[18],fixed_research=p.F_R*totals[18],innovation_frequency=totals[8],
+        exit_rate=totals[19],entry_rate=totals[19],replacement_quality_flux=totals[20],replacement_taste_flux=totals[21],
+        mean_exit_b=totals[19]>0 ? totals[22]/totals[19] : 0.,
+        entry_value=sum(ws.entry.*ws.V),exit_max_value=maximum(ws.V.*ws.policy.exit),
+        quality_flux=totals[9]+totals[20],clipping=totals[10],mean_b=totals[3],mean_a=totals[4],mean_variance=totals[5],
+        continuous_growth_error=G-totals[9]-totals[20],
+        taste_mean_error=totals[4]+G-totals[21],
+        split_taste_mean_error=totals[4]-totals[3]-n.dt*totals[20]-
+            n.dt*exp(-n.dt)/(-expm1(-n.dt))*totals[21]+G*n.dt/(-expm1(-n.dt)),
+        split_growth_error=totals[12]-totals[11]-totals[20],
+        budget_error=Y-p.K*totals[6]-totals[7]-C,
+        rd_binding_mass=totals[13],rd_zero_cashflow_mass=totals[14],
+        rd_cashflow_shortfall=totals[15],rd_mean_financing_multiplier=totals[16],
+        rd_max_cashflow_violation=maximum(violations),rd_max_kkt_residual=maximum(kkt_errors))
     residual,moments
 end
 function tensor_residual!(ws,z,p,n;verbose=false,update=true)
@@ -423,9 +474,19 @@ function tensor_residual!(ws,z,p,n;verbose=false,update=true)
 end
 
 function solve_large_bgp(p,n,ini;guess=nothing,verbose=true,warmstart=nothing)
+    candidate_workspace=Ref{Any}(nothing)
+    if p.F_R>0 && n.bgp_branch=="auto"
+        candidate=solve_zero_research_bgp(p,n,ini;guess=guess,verbose=verbose,warmstart=warmstart,workspace_sink=candidate_workspace)
+        candidate!==nothing && return candidate
+    end
     z=guess===nothing ? [log(.336),log(.338),log(.87),.0055] : copy(guess)
-    ws=tensor_workspace(p,n,ini,z[4])
-    if warmstart !== nothing
+    # A rejected zero-growth candidate must not start the growth search at G=0:
+    # that boundary can have multiple closed classes and a singular forward solve.
+    z[4]<=0 && (z[4]=.0055)
+    reused=candidate_workspace[]!==nothing
+    ws=reused ? candidate_workspace[] : tensor_workspace(p,n,ini,z[4])
+    reused && update_kernels!(ws,p,n,z[4])
+    if warmstart !== nothing && !reused
         size(warmstart.V)==size(ws.V) || error("Warm-start value dimensions do not match")
         size(warmstart.mu)==size(ws.mu) || error("Warm-start mass dimensions do not match")
         ws.V .= warmstart.V; ws.mu .= warmstart.mu
@@ -439,7 +500,9 @@ function solve_large_bgp(p,n,ini;guess=nothing,verbose=true,warmstart=nothing)
         mkpath(n.output)
         open(joinpath(n.output,"large_progress.toml"),"w") do io
             TOML.print(io,Dict("iteration"=>iteration,"unknowns"=>z,"residuals"=>result.residual,
-                "equilibrium_error"=>err,"firm_error"=>result.firm_error,"distribution_error"=>result.distribution_error))
+                "equilibrium_error"=>err,"firm_error"=>result.firm_error,"distribution_error"=>result.distribution_error,
+                "research"=>result.moments.research,"rd_active_mass"=>result.moments.rd_active_mass,
+                "exit_rate"=>result.moments.exit_rate))
         end
         err<n.tolerance && break
         J=zeros(4,4)
@@ -512,13 +575,21 @@ function write_large_bgp_results(result,p,n;directory=n.output)
         "threads"=>nthreads(),"price_temperature"=>n.price_temperature,
         "backend"=>"tensor-factorized matrix-free","scope"=>"stationary finite-grid BGP"))
     price_mass=vec(sum(ws.mu;dims=2))
+    data["rd_cashflow_constraint"]=true
+    data["F_R"]=p.F_R
+    data["lambda0"]=p.lambda0
+    for field in fieldnames(Parameters);data["parameter_"*string(field)]=getfield(p,field);end
+    data["replacement_entry"]=p.replacement_entry
+    data["equilibrium_selection"]=hasproperty(result,:equilibrium_selection) ? result.equilibrium_selection : "positive-growth aggregate root"
     data["price_grid_min"]=first(ws.g.axes[1])
     data["price_grid_max"]=last(ws.g.axes[1])
-    data["price_grid_spacing"]=ws.g.axes[1][2]-ws.g.axes[1][1]
+    data["price_grid_spacing"]=minimum(diff(ws.g.axes[1]))
+    data["price_grid_spacing_max"]=maximum(diff(ws.g.axes[1]))
+    data["bgp_branch"]=n.bgp_branch
     data["price_nodes_mass_above_1e6"]=count(>(1e-6),price_mass)
     data["price_effective_nodes"]=1/sum(abs2,price_mass)
     data["price_boundary_mass"]=first(price_mass)+last(price_mass)
-    post=ws.work[5];tensor_price_forward!(post,ws.mu,ws.policy)
+    post=ws.work[5];tensor_operating_forward!(post,ws.mu,ws)
     data["price_drift_clipping"]=sum(post[x,q] for q in axes(post,2),x in axes(post,1) if ws.drift.outside[x])
     data["menu_expenditure"]=p.K*result.moments.price_frequency
     write_solution_csv(data,joinpath(directory,"solution.csv"))
@@ -527,4 +598,11 @@ function write_large_bgp_results(result,p,n;directory=n.output)
         TOML.print(io,Dict("unknowns"=>result.unknowns,"residuals"=>result.residual,"history"=>result.history))
     end
     data
+end
+
+# Cache validity covers all numerical model sources, not just the tensor backend.
+function bgp_cache_signature(config,z)
+    sources=("DemandUncertainty.jl","BalancedGrowth.jl","LargeBGP.jl","ZeroResearchBGP.jl","ReplacementEntry.jl")
+    (read(config,String),z,string(VERSION),
+        join((read(joinpath(@__DIR__,file),String) for file in sources),"\n"))
 end

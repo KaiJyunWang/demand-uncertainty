@@ -1,0 +1,54 @@
+[initial]
+sd_a = 0.12
+log_nominal_price = 0.0
+mean_b = -0.03
+variance = 0.04
+mean_a = -0.03
+
+[numerical]
+terminal_consumption = 0.3333333333333333
+na = 51
+price_core_max = 0.12
+max_iterations = 55
+terminal_tolerance = 1.0e-7
+nb = 51
+steps = 8
+dt = 0.25
+nv = 51
+terminal_iterations = 500
+jacobian_refresh = 5
+xmin = -0.35
+xmax = 0.3
+price_upper_tail_nodes = 3
+nx = 51
+bmax = 3.6
+bgp_branch = "positive"
+tolerance = 1.0e-5
+quality_lower_tail_nodes = 10
+output = "results_bgp"
+amax = 3.9
+amin = -9.0
+bmin = -8.0
+price_core_min = -0.18
+price_temperature = 1.0e-5
+terminal_value = "frozen"
+quality_upper_tail_nodes = 6
+price_lower_tail_nodes = 3
+
+[economic]
+varphi = 5.0
+omega = 0.5
+epsilon = 7.0
+chi = 685.5749353654443
+phi_pi = 1.5
+K = 0.02
+premium = 0.2
+gamma = 1.0
+sigma_a = 0.2
+lambda0 = 3.0
+replacement_entry = true
+pi_target = 0.01980262729617973
+A = 1.0
+sigma_Q = 0.5
+F_R = 0.01
+rho = 0.04
